@@ -23,20 +23,36 @@ typedef HRESULT(WINAPI *D3DCompileFunc)(
 	ID3D10Blob** ppErrorMsgs);
 
 
-static const char* kD3D11ShaderText =
-"cbuffer MyCB : register(b0) {\n"
-"	float4x4 worldMatrix;\n"
-"}\n"
-"Texture2D source : register(t0);\n"
-"sampler pointSampler : register(s0); \n"
-"void VS (float3 pos : POSITION, float2 tex : TEXCOORD, out float2 otex : TEXCOORD, out float4 opos : SV_Position) {\n"
-"	opos = mul (worldMatrix, float4(pos,1));\n"
-"	otex = tex;\n"
-"}\n"
-"float4 PS (float4 pos : SV_POSITION, float2 tex : TEXCOORD) : SV_TARGET {\n"
-"	return float4(source.Sample(pointSampler, i.tex).rgb, 0);\n"
+static const char* kD3D11VertexShaderText =
+"struct Input {\n"\
+"	float3 pos : POSITION;\n"\
+"	float2 tex : TEXCOORD;\n"\
+"};\n"\
+"struct Output {\n"\
+"	float4 pos : SV_POSITION;\n"\
+"	float2 tex : TEXCOORD;\n"\
+"};\n"\
+"cbuffer VS_CONSTANT_BUFFER : register(b0) {\n"\
+"	float4x4 projectionMatrix;\n"\
+"}\n"\
+"Output main(Input i) {\n"\
+"	Output o;\n"\
+/*"	o.pos = mul(float4(i.pos, 1), projectionMatrix);\n"\*/
+"	o.pos = mul(projectionMatrix,float4(i.pos, 1));\n"\
+"	o.tex = i.tex;\n"\
+"	return o;\n"\
 "}\n";
 
+static const char* kD3D11PixelShaderText =
+"struct Input {\n"\
+"	float4 pos : SV_POSITION;\n"\
+"	float2 tex : TEXCOORD;\n"\
+"};\n"\
+"Texture2D source : register(t0);\n"\
+"sampler pointSampler : register(s0);\n"\
+"float4 main(Input i) : SV_TARGET{\n"\
+"	return float4(source.Sample(pointSampler, i.tex).rgb, 0);\n"\
+"}";
 
 static D3D11_INPUT_ELEMENT_DESC s_DX11InputElementDesc[] = {
 	{ "POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D11_INPUT_PER_VERTEX_DATA, 0 },
@@ -61,13 +77,13 @@ struct SimpleConstantBuffer
 // Supply the actual vertex data.
 SimpleVertex quadVertices[] =
 {
-	{ -1.0f, -1.0f, -1.0f, 0.0f, 1.0f },
-	{ -1.0f, 1.0f, -1.0f, 0.0f, 0.0f },
-	{ 1.0f, 1.0f, -1.0f, 1.0f, 0.0f },
+	{ -1.0f, -1.0f, 0.0f, 0.0f, 1.0f },
+	{ 1.0f, 1.0f, 0.0f, 1.0f, 0.0f },
+	{ -1.0f, 1.0f, 0.0f, 0.0f, 0.0f },
 
-	{ 1.0f, 1.0f, -1.0f, 1.0f, 0.0f },
-	{ 1.0f, -1.0f, -1.0f, 1.0f, 1.0f },
-	{ -1.0f, -1.0f, -1.0f, 0.0f, 1.0f },
+	{ 1.0f, -1.0f, 0.0f, 1.0f, 1.0f },
+	{ 1.0f, 1.0f, 0.0f, 1.0f, 0.0f },
+	{ -1.0f, -1.0f, 0.0f, 0.0f, 1.0f },
 };
 
 
@@ -91,6 +107,7 @@ struct WindowsWindows {
 
 	ID3D11Texture2D* quadTexture = nullptr;
 	ID3D11ShaderResourceView* quadTextureSRV = nullptr;
+	D3D11_BOX quadTextureMip0Bounds;
 
 	void compileShaders();
 
@@ -118,13 +135,13 @@ void WindowsWindows::compileShaders() {
 		if (compileFunc)
 		{
 			HRESULT hr;
-			hr = compileFunc(kD3D11ShaderText, strlen(kD3D11ShaderText), NULL, NULL, NULL, "VS", "vs_4_0", 0, 0, &vsBlob, NULL);
+			hr = compileFunc(kD3D11VertexShaderText, strlen(kD3D11VertexShaderText), NULL, NULL, NULL, "main", "vs_4_0", 0, 0, &vsBlob, NULL);
 			if (SUCCEEDED(hr))
 			{
 				device->CreateVertexShader(vsBlob->GetBufferPointer(), vsBlob->GetBufferSize(), NULL, &vertexShader);
 			}
 
-			hr = compileFunc(kD3D11ShaderText, strlen(kD3D11ShaderText), NULL, NULL, NULL, "PS", "ps_4_0", 0, 0, &psBlob, NULL);
+			hr = compileFunc(kD3D11PixelShaderText, strlen(kD3D11PixelShaderText), NULL, NULL, NULL, "main", "ps_4_0", 0, 0, &psBlob, NULL);
 			if (SUCCEEDED(hr))
 			{
 				device->CreatePixelShader(psBlob->GetBufferPointer(), psBlob->GetBufferSize(), NULL, &pixelShader);
@@ -249,12 +266,11 @@ extern "C" void EXPORT_API UnityRenderEvent(int eventID)
 
 		DXGI_OUTDUPL_FRAME_INFO frameInfo;
 		IDXGIResource* desktopResource = nullptr;
-		ID3D11Texture2D* desktopImage = nullptr;
-		ID3D11Texture2D* lastScreen = nullptr;
-		ID3D11ShaderResourceView* lastScreenShaderView = nullptr;
 
 		HRESULT hr = g_Windows.duplication->AcquireNextFrame(0, &frameInfo, &desktopResource);
 		if (hr != DXGI_ERROR_WAIT_TIMEOUT) {
+
+			ID3D11Texture2D* desktopImage = nullptr;
 			validateHR(desktopResource->QueryInterface(__uuidof(ID3D11Texture2D), reinterpret_cast<void **>(&desktopImage)), "GetDesktopImage");
 
 			if (g_Windows.quadTexture == nullptr) {
@@ -266,34 +282,55 @@ extern "C" void EXPORT_API UnityRenderEvent(int eventID)
 
 				validateHR(g_Windows.device->CreateTexture2D(&desktopImageDesc, nullptr, &g_Windows.quadTexture), "CreateQuadTexture");
 				validateHR(g_Windows.device->CreateShaderResourceView(g_Windows.quadTexture, nullptr, &g_Windows.quadTextureSRV), "GetQuadTextureSRV");
+
+				D3D11_BOX box;
+				box.left = 0; box.right = desktopImageDesc.Width;
+				box.top = 0; box.bottom = desktopImageDesc.Height;
+				box.front = 0; box.back = 1;
+				g_Windows.quadTextureMip0Bounds = box;
 			}
 
-
-			D3D11_TEXTURE2D_DESC desc;
-			g_Windows.quadTexture->GetDesc(&desc);
-			D3D11_BOX box;
-			box.left = 0; box.right = desc.Width;
-			box.top = 0; box.bottom = desc.Height;
-			box.front = 0; box.back = 1;
-			context->CopySubresourceRegion(g_Windows.quadTexture, 0, 0, 0, 0, desktopImage, 0, &box);
+			context->CopySubresourceRegion(g_Windows.quadTexture, 0, 0, 0, 0, desktopImage, 0, &g_Windows.quadTextureMip0Bounds);
 			context->GenerateMips(g_Windows.quadTextureSRV);
 			desktopImage->Release(); desktopImage = nullptr;
 			desktopResource->Release(); desktopResource = nullptr;
 			validateHR(g_Windows.duplication->ReleaseFrame(), "ReleaseFrame");
 		}
 
+		g_Windows.renderMatrix[0] = 1;
+		g_Windows.renderMatrix[1] = 0;
+		g_Windows.renderMatrix[2] = 0;
+		g_Windows.renderMatrix[3] = 0;
+
+		g_Windows.renderMatrix[4] = 0;
+		g_Windows.renderMatrix[5] = 1;
+		g_Windows.renderMatrix[6] = 0;
+		g_Windows.renderMatrix[7] = 0;
+
+		g_Windows.renderMatrix[8] = 0;
+		g_Windows.renderMatrix[9] = 0;
+		g_Windows.renderMatrix[10] = 1;
+		g_Windows.renderMatrix[11] = 0;
+
+		g_Windows.renderMatrix[12] = 0;
+		g_Windows.renderMatrix[13] = 0;
+		g_Windows.renderMatrix[14] = 0.7f;
+		g_Windows.renderMatrix[15] = 1;
+
 		D3D11_MAPPED_SUBRESOURCE map;
 		validateHR(context->Map(g_Windows.vertexShaderConstantBuffer, 0, D3D11_MAP_WRITE_DISCARD, 0, &map), "Map");
 		memcpy(map.pData, g_Windows.renderMatrix, sizeof(SimpleConstantBuffer));
 		context->Unmap(g_Windows.vertexShaderConstantBuffer, 0);
+		
 		// Set Viewport
-		D3D11_VIEWPORT vp = {};
+		/*D3D11_VIEWPORT vp = {};
 		vp.TopLeftX = g_Windows.viewport[0];
 		vp.TopLeftY = g_Windows.viewport[1];
 		vp.Width = g_Windows.viewport[2];
 		vp.Height = g_Windows.viewport[3];
 		vp.MaxDepth = 1.0f;
-		context->RSSetViewports(1, &vp);
+		context->RSSetViewports(1, &vp);*/
+
 		UINT stride = sizeof(SimpleVertex);
 		UINT offset = 0;
 		context->IASetVertexBuffers(0, 1, &g_Windows.vertexBuffer, &stride, &offset);
@@ -303,11 +340,15 @@ extern "C" void EXPORT_API UnityRenderEvent(int eventID)
 		context->VSSetShader(g_Windows.vertexShader, nullptr, 0);
 		context->PSSetShader(g_Windows.pixelShader, nullptr, 0);
 		context->PSSetSamplers(0, 1, &g_Windows.samplerState);
-		context->PSSetShaderResources(0, 1, &lastScreenShaderView);
+		context->PSSetShaderResources(0, 1, &g_Windows.quadTextureSRV);
 		context->Draw(6, 0);
 
 		context->Release();
 	}
+}
+
+extern "C" void EXPORT_API SayHello() {
+	g_Windows = g_Windows;
 }
 
 extern "C" void EXPORT_API SetViewport(float viewport[4]) {
