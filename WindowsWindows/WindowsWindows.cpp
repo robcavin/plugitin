@@ -110,7 +110,8 @@ struct WindowsWindows {
 
 	void compileShaders();
 
-	float renderMatrix[16];
+	float renderMatrix[2][16];
+
 };
 
 static WindowsWindows g_Windows;
@@ -166,12 +167,12 @@ extern "C" void EXPORT_API UnitySetGraphicsDevice(void* device, int deviceType, 
 	if (deviceType == kGfxRendererD3D11 && eventType == kGfxDeviceEventInitialize)
 	{
 		g_Windows.device = (ID3D11Device*)device;
-
+	
 		// render states
 		D3D11_RASTERIZER_DESC rsdesc;
 		memset(&rsdesc, 0, sizeof(rsdesc));
 		rsdesc.FillMode = D3D11_FILL_SOLID;
-		rsdesc.CullMode = D3D11_CULL_BACK;
+		rsdesc.CullMode = D3D11_CULL_NONE;  // Would like to cull back, but in debug mode right now
 		rsdesc.FrontCounterClockwise = false;
 		rsdesc.DepthClipEnable = true;
 		rsdesc.MultisampleEnable = true;
@@ -199,7 +200,8 @@ extern "C" void EXPORT_API UnitySetGraphicsDevice(void* device, int deviceType, 
 		samplerDesc.AddressU = D3D11_TEXTURE_ADDRESS_BORDER;
 		samplerDesc.AddressV = D3D11_TEXTURE_ADDRESS_BORDER;
 		samplerDesc.AddressW = D3D11_TEXTURE_ADDRESS_BORDER;
-
+		samplerDesc.Filter = D3D11_FILTER_ANISOTROPIC;
+		samplerDesc.MaxAnisotropy = 4;
 		validateHR(g_Windows.device->CreateSamplerState(&samplerDesc, &g_Windows.samplerState), "CreateSamplerState");
 
 		// Fill in a buffer description.
@@ -320,8 +322,12 @@ extern "C" void EXPORT_API UnityRenderEvent(int eventID)
 
 		D3D11_MAPPED_SUBRESOURCE map;
 		validateHR(context->Map(g_Windows.vertexShaderConstantBuffer, 0, D3D11_MAP_WRITE_DISCARD, 0, &map), "Map");
-		memcpy(map.pData, g_Windows.renderMatrix, sizeof(SimpleConstantBuffer));
-		context->Unmap(g_Windows.vertexShaderConstantBuffer, 0);		
+			
+		static int index = 0;
+		memcpy(map.pData, g_Windows.renderMatrix[index++], sizeof(SimpleConstantBuffer));
+		if (index >= 2) index = 0;
+
+		context->Unmap(g_Windows.vertexShaderConstantBuffer, 0);
 
 		UINT stride = sizeof(SimpleVertex);
 		UINT offset = 0;
@@ -343,8 +349,11 @@ extern "C" void EXPORT_API SayHello() {
 	g_Windows = g_Windows;
 }
 
-extern "C" void EXPORT_API SetRenderMatrix(float renderMatrix[16]) {
-	memcpy(g_Windows.renderMatrix, renderMatrix, 16 * sizeof(float));
+extern "C" void EXPORT_API SetRenderMatrix(int id, float renderMatrix[16]) {
+
+	static int index = 0;
+	memcpy(g_Windows.renderMatrix[index++], renderMatrix, 16 * sizeof(float));
+	if (index >= 2) index = 0;
 }
 
 extern "C" EXPORT_API UINT GetScreenWidth() {
