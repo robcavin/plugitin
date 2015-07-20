@@ -3,7 +3,6 @@
 
 #include <dxgi1_2.h>
 #include <d3d11.h>
-#include <deque>
 
 #ifndef SAFE_RELEASE
 #define SAFE_RELEASE(a) if (a) { a->Release(); a = NULL; }
@@ -37,8 +36,8 @@ static const char* kD3D11VertexShaderText =
 "}\n"\
 "Output main(Input i) {\n"\
 "	Output o;\n"\
-/*"	o.pos = mul(float4(i.pos, 1), projectionMatrix);\n"\*/
-"	o.pos = mul(projectionMatrix,float4(i.pos, 1));\n"\
+"	o.pos = mul(float4(i.pos, 1), projectionMatrix);\n"\
+/*"	o.pos = mul(projectionMatrix,float4(i.pos, 1));\n"\*/
 "	o.tex = i.tex;\n"\
 "	return o;\n"\
 "}\n";
@@ -77,13 +76,13 @@ struct SimpleConstantBuffer
 // Supply the actual vertex data.
 SimpleVertex quadVertices[] =
 {
-	{ -1.0f, -1.0f, 0.0f, 0.0f, 1.0f },
-	{ 1.0f, 1.0f, 0.0f, 1.0f, 0.0f },
-	{ -1.0f, 1.0f, 0.0f, 0.0f, 0.0f },
+	{ -0.5f, -0.5f, 0.0f, 0.0f, 1.0f },
+	{ -0.5f, 0.5f, 0.0f, 0.0f, 0.0f },
+	{ 0.5f, 0.5f, 0.0f, 1.0f, 0.0f },
 
-	{ 1.0f, -1.0f, 0.0f, 1.0f, 1.0f },
-	{ 1.0f, 1.0f, 0.0f, 1.0f, 0.0f },
-	{ -1.0f, -1.0f, 0.0f, 0.0f, 1.0f },
+	{ 0.5f, 0.5f, 0.0f, 1.0f, 0.0f },
+	{ 0.5f, -0.5f, 0.0f, 1.0f, 1.0f },
+	{ -0.5f, -0.5f, 0.0f, 0.0f, 1.0f },
 };
 
 
@@ -111,7 +110,6 @@ struct WindowsWindows {
 
 	void compileShaders();
 
-	float viewport[4];
 	float renderMatrix[16];
 };
 
@@ -173,20 +171,22 @@ extern "C" void EXPORT_API UnitySetGraphicsDevice(void* device, int deviceType, 
 		D3D11_RASTERIZER_DESC rsdesc;
 		memset(&rsdesc, 0, sizeof(rsdesc));
 		rsdesc.FillMode = D3D11_FILL_SOLID;
-		rsdesc.CullMode = D3D11_CULL_NONE;
-		rsdesc.DepthClipEnable = TRUE;
+		rsdesc.CullMode = D3D11_CULL_BACK;
+		rsdesc.FrontCounterClockwise = false;
+		rsdesc.DepthClipEnable = true;
+		rsdesc.MultisampleEnable = true;
 		g_Windows.device->CreateRasterizerState(&rsdesc, &g_Windows.rasterState);
 
 		D3D11_DEPTH_STENCIL_DESC dsdesc;
 		memset(&dsdesc, 0, sizeof(dsdesc));
-		dsdesc.DepthEnable = TRUE;
+		dsdesc.DepthEnable = true;
 		dsdesc.DepthWriteMask = D3D11_DEPTH_WRITE_MASK_ZERO;
 		dsdesc.DepthFunc = D3D11_COMPARISON_LESS_EQUAL;
 		g_Windows.device->CreateDepthStencilState(&dsdesc, &g_Windows.depthStencilState);
 
 		D3D11_BLEND_DESC bdesc;
 		memset(&bdesc, 0, sizeof(bdesc));
-		bdesc.RenderTarget[0].BlendEnable = FALSE;
+		bdesc.RenderTarget[0].BlendEnable = false;
 		bdesc.RenderTarget[0].RenderTargetWriteMask = 0xF;
 		g_Windows.device->CreateBlendState(&bdesc, &g_Windows.blendState);
 
@@ -251,6 +251,27 @@ extern "C" void EXPORT_API UnitySetGraphicsDevice(void* device, int deviceType, 
 
 		validateHR(DxgiOutput1->DuplicateOutput(g_Windows.device, &g_Windows.duplication), "GetDuplicateOutput");
 	}
+
+
+	if (deviceType == kGfxRendererD3D11 && eventType == kGfxDeviceEventShutdown) {
+
+		SAFE_RELEASE(g_Windows.duplication);
+
+		SAFE_RELEASE(g_Windows.quadTextureSRV);
+		SAFE_RELEASE(g_Windows.quadTexture);
+		SAFE_RELEASE(g_Windows.samplerState);
+		SAFE_RELEASE(g_Windows.blendState);
+		SAFE_RELEASE(g_Windows.depthStencilState);
+		SAFE_RELEASE(g_Windows.rasterState);
+		SAFE_RELEASE(g_Windows.vertexShaderConstantBuffer);
+		SAFE_RELEASE(g_Windows.vertexBufferInputLayout);
+		SAFE_RELEASE(g_Windows.vertexBuffer);
+		SAFE_RELEASE(g_Windows.vertexShader);
+		SAFE_RELEASE(g_Windows.pixelShader);
+
+		g_Windows.device = nullptr;
+	}
+
 }
 
 
@@ -297,39 +318,10 @@ extern "C" void EXPORT_API UnityRenderEvent(int eventID)
 			validateHR(g_Windows.duplication->ReleaseFrame(), "ReleaseFrame");
 		}
 
-		g_Windows.renderMatrix[0] = 1;
-		g_Windows.renderMatrix[1] = 0;
-		g_Windows.renderMatrix[2] = 0;
-		g_Windows.renderMatrix[3] = 0;
-
-		g_Windows.renderMatrix[4] = 0;
-		g_Windows.renderMatrix[5] = 1;
-		g_Windows.renderMatrix[6] = 0;
-		g_Windows.renderMatrix[7] = 0;
-
-		g_Windows.renderMatrix[8] = 0;
-		g_Windows.renderMatrix[9] = 0;
-		g_Windows.renderMatrix[10] = 1;
-		g_Windows.renderMatrix[11] = 0;
-
-		g_Windows.renderMatrix[12] = 0;
-		g_Windows.renderMatrix[13] = 0;
-		g_Windows.renderMatrix[14] = 0.7f;
-		g_Windows.renderMatrix[15] = 1;
-
 		D3D11_MAPPED_SUBRESOURCE map;
 		validateHR(context->Map(g_Windows.vertexShaderConstantBuffer, 0, D3D11_MAP_WRITE_DISCARD, 0, &map), "Map");
 		memcpy(map.pData, g_Windows.renderMatrix, sizeof(SimpleConstantBuffer));
-		context->Unmap(g_Windows.vertexShaderConstantBuffer, 0);
-		
-		// Set Viewport
-		/*D3D11_VIEWPORT vp = {};
-		vp.TopLeftX = g_Windows.viewport[0];
-		vp.TopLeftY = g_Windows.viewport[1];
-		vp.Width = g_Windows.viewport[2];
-		vp.Height = g_Windows.viewport[3];
-		vp.MaxDepth = 1.0f;
-		context->RSSetViewports(1, &vp);*/
+		context->Unmap(g_Windows.vertexShaderConstantBuffer, 0);		
 
 		UINT stride = sizeof(SimpleVertex);
 		UINT offset = 0;
@@ -351,10 +343,14 @@ extern "C" void EXPORT_API SayHello() {
 	g_Windows = g_Windows;
 }
 
-extern "C" void EXPORT_API SetViewport(float viewport[4]) {
-	memcpy(g_Windows.viewport,viewport,4 * sizeof(float));
-}
-
 extern "C" void EXPORT_API SetRenderMatrix(float renderMatrix[16]) {
 	memcpy(g_Windows.renderMatrix, renderMatrix, 16 * sizeof(float));
+}
+
+extern "C" EXPORT_API UINT GetScreenWidth() {
+	return g_Windows.quadTextureMip0Bounds.right - g_Windows.quadTextureMip0Bounds.left;
+}
+
+extern "C" EXPORT_API UINT GetScreenHeight() {
+	return g_Windows.quadTextureMip0Bounds.bottom - g_Windows.quadTextureMip0Bounds.top;
 }

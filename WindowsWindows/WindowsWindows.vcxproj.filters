@@ -33,12 +33,4 @@
       <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>
-  <ItemGroup>
-    <FxCompile Include="simpleps.hlsl">
-      <Filter>Resource Files</Filter>
-    </FxCompile>
-    <FxCompile Include="simplevs.hlsl">
-      <Filter>Resource Files</Filter>
-    </FxCompile>
-  </ItemGroup>
 </Project>
